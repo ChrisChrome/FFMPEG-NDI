@@ -1,0 +1,137 @@
+name: Build FFMPEG-NDI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    container:
+      image: debian:12
+
+    env:
+      PREFIX: /opt/ffmpeg-ndi-linux
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y git build-essential yasm nasm pkg-config autoconf automake libtool curl ca-certificates
+
+      - name: Clone FFmpeg
+        run: |
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          cd ffmpeg
+          git checkout n5.1
+
+      - name: Apply NDI patch
+        run: |
+          cd ffmpeg
+          git config user.email "ci@example.com"
+          git am ../libndi.patch
+          cp ../libavdevice/libndi_newtek_* libavdevice/
+
+      - name: Install NDI SDK
+        run: |
+          mkdir -p /tmp/ndi
+          curl -L https://downloads.ndi.tv/SDK/NDI_SDK_Linux.tar.gz -o /tmp/ndi/ndi-sdk.tar.gz
+          tar -xzf /tmp/ndi/ndi-sdk.tar.gz -C /tmp/ndi
+          cp -r /tmp/ndi/NDI\ SDK\ for\ Linux/* /usr/local/
+          ldconfig
+
+      - name: Configure
+        run: |
+          cd ffmpeg
+          ./configure \
+            --prefix=$PREFIX \
+            --enable-nonfree \
+            --enable-libndi_newtek \
+            --extra-cflags="-I/usr/local/include" \
+            --extra-ldflags="-L/usr/local/lib"
+
+      - name: Build
+        run: |
+          cd ffmpeg
+          make -j$(nproc) && make install
+
+      - name: Package Linux binary
+        run: |
+          tar -czf ffmpeg-ndi-linux.tar.gz -C $PREFIX .
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-ndi-linux
+          path: ffmpeg-ndi-linux.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+
+    env:
+      PREFIX: C:\\ffmpeg-ndi-win
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v3
+        with:
+          update: true
+
+      - name: Install build tools
+        run: |
+          pacman --needed --noconfirm -S git make yasm pkg-config mingw-w64-x86_64-gcc mingw-w64-x86_64-yasm
+
+      - name: Clone FFmpeg
+        run: |
+          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          cd ffmpeg
+          git checkout n5.1
+
+      - name: Apply NDI patch
+        run: |
+          cd ffmpeg
+          git config user.email "ci@example.com"
+          git am ../libndi.patch
+          cp ../libavdevice/libndi_newtek_* libavdevice/
+
+      - name: Download & install Windows NDI SDK
+        run: |
+          curl -L -o ndi-sdk.zip "https://downloads.ndi.tv/SDK/NDI_SDK_Windows.zip"
+          powershell -c "Expand-Archive -Path ndi-sdk.zip -DestinationPath NDI_SDK"
+          copy /y NDI_SDK\\Include C:\\msys64\\mingw64\\include
+          copy /y NDI_SDK\\Lib\\x64\\*.lib C:\\msys64\\mingw64\\lib
+
+      - name: Configure Windows build
+        run: |
+          cd ffmpeg
+          ./configure \
+            --prefix=$PREFIX \
+            --toolchain=msvc \
+            --enable-nonfree \
+            --enable-libndi_newtek \
+            --extra-cflags="-IC:/msys64/mingw64/include" \
+            --extra-ldflags="-LC:/msys64/mingw64/lib"
+
+      - name: Build Windows
+        run: |
+          cd ffmpeg
+          make -j$(NUMBER_OF_PROCESSORS) && make install
+
+      - name: Package Windows build
+        run: |
+          powershell -c "Compress-Archive -Path C:\\ffmpeg-ndi-win\\* -DestinationPath ffmpeg-ndi-win.zip"
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-ndi-win
+          path: ffmpeg-ndi-win.zip
