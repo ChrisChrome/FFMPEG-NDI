@@ -10,9 +10,6 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
 
-    container:
-      image: debian:12
-
     env:
       PREFIX: /opt/ffmpeg-ndi-linux
 
@@ -22,8 +19,12 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          apt-get update
-          apt-get install -y git build-essential yasm nasm pkg-config autoconf automake libtool curl ca-certificates
+          sudo apt-get update
+          sudo apt-get install -y git build-essential yasm nasm pkg-config autoconf automake libtool curl ca-certificates libssl-dev libx264-dev
+
+      - name: Run preinstall script
+        run: |
+          sudo bash ./preinstall.sh
 
       - name: Clone FFmpeg
         run: |
@@ -31,20 +32,20 @@ jobs:
           cd ffmpeg
           git checkout n5.1
 
-      - name: Apply NDI patch
+      - name: Apply NDI patch and copy helper files
         run: |
           cd ffmpeg
           git config user.email "ci@example.com"
           git am ../libndi.patch
           cp ../libavdevice/libndi_newtek_* libavdevice/
 
-      - name: Install NDI SDK
+      - name: Install NDI SDK (Linux)
         run: |
           mkdir -p /tmp/ndi
           curl -L https://downloads.ndi.tv/SDK/NDI_SDK_Linux.tar.gz -o /tmp/ndi/ndi-sdk.tar.gz
           tar -xzf /tmp/ndi/ndi-sdk.tar.gz -C /tmp/ndi
-          cp -r /tmp/ndi/NDI\ SDK\ for\ Linux/* /usr/local/
-          ldconfig
+          sudo cp -r /tmp/ndi/NDI\ SDK\ for\ Linux/* /usr/local/
+          sudo ldconfig
 
       - name: Configure
         run: |
@@ -59,11 +60,11 @@ jobs:
       - name: Build
         run: |
           cd ffmpeg
-          make -j$(nproc) && make install
+          make -j$(nproc) && sudo make install
 
       - name: Package Linux binary
         run: |
-          tar -czf ffmpeg-ndi-linux.tar.gz -C $PREFIX .
+          sudo tar -czf ffmpeg-ndi-linux.tar.gz -C $PREFIX .
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
@@ -86,19 +87,18 @@ jobs:
         with:
           update: true
 
-      - name: Install build tools
+      - name: Install build tools (MSYS2)
+        shell: bash -lc
         run: |
+          pacman --needed --noconfirm -Syu
           pacman --needed --noconfirm -S git make yasm pkg-config mingw-w64-x86_64-gcc mingw-w64-x86_64-yasm
 
-      - name: Clone FFmpeg
+      - name: Clone FFmpeg and apply patch (MSYS2)
+        shell: bash -lc
         run: |
           git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg
           cd ffmpeg
           git checkout n5.1
-
-      - name: Apply NDI patch
-        run: |
-          cd ffmpeg
           git config user.email "ci@example.com"
           git am ../libndi.patch
           cp ../libavdevice/libndi_newtek_* libavdevice/
@@ -106,11 +106,12 @@ jobs:
       - name: Download & install Windows NDI SDK
         run: |
           curl -L -o ndi-sdk.zip "https://downloads.ndi.tv/SDK/NDI_SDK_Windows.zip"
-          powershell -c "Expand-Archive -Path ndi-sdk.zip -DestinationPath NDI_SDK"
-          copy /y NDI_SDK\\Include C:\\msys64\\mingw64\\include
-          copy /y NDI_SDK\\Lib\\x64\\*.lib C:\\msys64\\mingw64\\lib
+          powershell -Command "Expand-Archive -Path ndi-sdk.zip -DestinationPath NDI_SDK"
+          powershell -Command "Copy-Item -Path 'NDI_SDK\Include\*' -Destination 'C:\msys64\mingw64\include' -Recurse -Force"
+          powershell -Command "Copy-Item -Path 'NDI_SDK\Lib\x64\*.lib' -Destination 'C:\msys64\mingw64\lib' -Force"
 
-      - name: Configure Windows build
+      - name: Configure Windows build (MSYS2)
+        shell: bash -lc
         run: |
           cd ffmpeg
           ./configure \
@@ -121,14 +122,15 @@ jobs:
             --extra-cflags="-IC:/msys64/mingw64/include" \
             --extra-ldflags="-LC:/msys64/mingw64/lib"
 
-      - name: Build Windows
+      - name: Build Windows (MSYS2)
+        shell: bash -lc
         run: |
           cd ffmpeg
           make -j$(NUMBER_OF_PROCESSORS) && make install
 
       - name: Package Windows build
         run: |
-          powershell -c "Compress-Archive -Path C:\\ffmpeg-ndi-win\\* -DestinationPath ffmpeg-ndi-win.zip"
+          powershell -Command "Compress-Archive -Path C:\\ffmpeg-ndi-win\\* -DestinationPath ffmpeg-ndi-win.zip"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
